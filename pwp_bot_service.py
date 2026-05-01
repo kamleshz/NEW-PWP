@@ -1016,6 +1016,7 @@ class PWPBotService:
             except Exception:
                 pass
 
+        headless_mode = self._is_headless_enabled()
         self.driver = self._build_driver()
         self.driver.implicitly_wait(15)
         self.driver.get("https://eprplastic.cpcb.gov.in/#/plastic/home")
@@ -1034,9 +1035,21 @@ class PWPBotService:
         self.driver.find_element(by=By.XPATH, value='//*[@id="password_pass"]').send_keys(password)
 
         self.logged_in = True
+        if headless_mode:
+            message = (
+                "Server-side browser session started in headless mode. "
+                "Nothing will open on the user's device. "
+                "If the portal requires captcha or manual verification, this deployed login flow may not complete."
+            )
+        else:
+            message = (
+                "Browser opened locally and credentials were filled. "
+                "Complete any captcha or final login step in the visible browser if the portal asks for it."
+            )
         return {
-            "message": "Browser opened and credentials filled. Complete any captcha or final login step in the browser if the portal asks for it.",
+            "message": message,
             "cookies_count": len(self.driver.get_cookies()),
+            "headless_mode": headless_mode,
         }
 
     def validate_state_district_data(self, df, source_file_path=None):

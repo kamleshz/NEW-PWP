@@ -39,6 +39,35 @@ python app.py
 
 4. Open `http://localhost:5000`
 
+## Desktop Build
+
+Use the desktop bot when users must see and interact with the browser on their own Windows machine.
+
+1. Build the packaged desktop app:
+
+```powershell
+.\build_desktop.ps1
+```
+
+2. Share only the packaged output from:
+
+- `desktop_release\PWPDesktopApp.exe`
+- `desktop_release\PWPDesktopApp.zip`
+- `desktop_release\CLIENT_README.txt`
+
+3. Do not share the `.py` source files with clients.
+
+## Desktop Update Flow
+
+- Desktop app version is stored in `New PWP Bot.py`
+- Update metadata is stored in `desktop_release.json`
+- Users get update checks on startup and from `Help -> Check for Updates`
+- For a new desktop release:
+  - increase the app version
+  - update `desktop_release.json`
+  - rebuild the `.exe`
+  - upload the packaged file to GitHub Releases
+
 ## Render Deployment
 
 1. Push this project to GitHub.
@@ -77,3 +106,9 @@ python app.py
 - Add permanent file storage such as S3 or Cloudinary
 - Add authentication for your own app
 - Add database-backed job history if you want multi-user usage
+
+## Code Visibility Note
+
+- Server deployment protects code best because users never receive backend files.
+- Desktop `.exe` packaging hides source better than sharing `.py` files, but it is not perfect protection against reverse engineering.
+- For the current CPCB login flow, desktop packaging is the practical option when visible user-side browser interaction is required.

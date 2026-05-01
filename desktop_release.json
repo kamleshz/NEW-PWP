@@ -1,0 +1,9 @@
+{
+  "version": "1.0.0",
+  "download_url": "https://github.com/kamleshz/NEW-PWP/releases/latest",
+  "release_notes": [
+    "Desktop app can now check GitHub for new versions.",
+    "Users see update notifications on startup and from the Help menu.",
+    "Current build includes the PWP automation dashboard and deployable web app files."
+  ]
+}

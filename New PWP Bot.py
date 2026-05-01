@@ -21,6 +21,8 @@ import json
 import os
 import math
 import difflib
+import threading
+import webbrowser
 from bs4 import BeautifulSoup
 from dateutil.relativedelta import relativedelta
 from PyPDF2 import PdfMerger,PdfReader
@@ -29,6 +31,100 @@ from reportlab.lib.pagesizes import letter, inch
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
 from selenium.webdriver.common.action_chains import ActionChains
 from requests.exceptions import ConnectTimeout
+
+APP_VERSION = "1.0.0"
+UPDATE_METADATA_URL = "https://raw.githubusercontent.com/kamleshz/NEW-PWP/main/desktop_release.json"
+DEFAULT_RELEASE_PAGE_URL = "https://github.com/kamleshz/NEW-PWP/releases/latest"
+
+def parse_version_parts(version_value):
+    version_text = str(version_value or "").strip().lstrip("vV")
+    parts = []
+    for piece in version_text.split("."):
+        digits = "".join(char for char in piece if char.isdigit())
+        parts.append(int(digits) if digits else 0)
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts[:3])
+
+def is_newer_version(latest_version, current_version):
+    return parse_version_parts(latest_version) > parse_version_parts(current_version)
+
+def fetch_release_metadata():
+    response = requests.get(UPDATE_METADATA_URL, timeout=10)
+    response.raise_for_status()
+    metadata = response.json()
+    if not isinstance(metadata, dict):
+        raise ValueError("Invalid update metadata format.")
+    return metadata
+
+def build_release_notes_text(metadata):
+    notes = metadata.get("release_notes", [])
+    if isinstance(notes, list):
+        notes = [str(item).strip() for item in notes if str(item).strip()]
+        return "\n".join(f"- {item}" for item in notes)
+    return str(notes).strip()
+
+def open_update_download(metadata):
+    download_url = str(metadata.get("download_url", "")).strip() or DEFAULT_RELEASE_PAGE_URL
+    webbrowser.open(download_url)
+
+def get_update_summary_lines(latest_version):
+    return [
+        f"Current version: {APP_VERSION}",
+        f"Latest version: {latest_version}"
+    ]
+
+def handle_update_success(metadata, show_latest_message, auto_check):
+    latest_version = str(metadata.get("version", "")).strip()
+    if not latest_version:
+        if not auto_check:
+            messagebox.showwarning("Update Check", "Update metadata is missing a version number.")
+        return
+
+    if is_newer_version(latest_version, APP_VERSION):
+        release_notes = build_release_notes_text(metadata)
+        prompt_lines = get_update_summary_lines(latest_version)
+        if release_notes:
+            prompt_lines.extend(["", "Release notes:", release_notes])
+        prompt_lines.extend(["", "Do you want to open the download page now?"])
+        if 'update_status' in globals():
+            update_status(f"New version {latest_version} is available.", "info")
+        if messagebox.askyesno("Update Available", "\n".join(prompt_lines)):
+            open_update_download(metadata)
+        return
+
+    if 'update_status' in globals():
+        update_status(f"You are using the latest desktop version ({APP_VERSION}).", "success")
+    if show_latest_message:
+        messagebox.showinfo(
+            "No Updates",
+            "\n".join(get_update_summary_lines(latest_version)) + "\n\nYou are already using the latest desktop version."
+        )
+
+def handle_update_error(error_message, auto_check):
+    if 'update_status' in globals():
+        update_status("Unable to check for updates right now.", "error")
+    if not auto_check:
+        messagebox.showwarning(
+            "Update Check Failed",
+            "The app could not check GitHub for a newer version right now.\n\n"
+            f"Reason: {error_message}\n\n"
+            "Please verify your internet connection and try again later."
+        )
+
+def check_for_updates(show_latest_message=True, auto_check=False):
+    if 'update_status' in globals():
+        update_status("Checking for desktop updates...", "info")
+
+    def worker():
+        try:
+            metadata = fetch_release_metadata()
+        except Exception as e:
+            root.after(0, lambda: handle_update_error(str(e), auto_check))
+            return
+        root.after(0, lambda: handle_update_success(metadata, show_latest_message, auto_check))
+
+    threading.Thread(target=worker, daemon=True).start()
 
 def custom_wait_clickable_and_click(driver, locator, attempts=10):
     count = 0
@@ -1981,7 +2077,7 @@ def run_delete_upload_data():
         messagebox.showerror("Delete Upload Error", str(e))
 
 root = Tk()
-root.title("PWP Automation Dashboard")
+root.title(f"PWP Automation Dashboard v{APP_VERSION}")
 root.configure(bg=APP_BG)
 root.resizable(width=False, height=False)
 
@@ -2012,7 +2108,14 @@ excel_menu.add_command(label="Download Delete Entry Format", command=download_de
 
 view_menu = Menu(menubar, tearoff=0, bg=HEADER_BG, fg=HEADER_TEXT)
 menubar.add_cascade(label="Help", menu=view_menu)
-view_menu.add_command(label="About", command=lambda: messagebox.showinfo("About", "PWP Automation Dashboard"))
+view_menu.add_command(
+    label="About",
+    command=lambda: messagebox.showinfo(
+        "About",
+        f"PWP Automation Dashboard\nVersion: {APP_VERSION}"
+    )
+)
+view_menu.add_command(label="Check for Updates", command=lambda: check_for_updates(show_latest_message=True, auto_check=False))
 
 header_frame = Frame(root, bg=HEADER_BG, padx=24, pady=18)
 header_frame.pack(fill="x")
@@ -2215,6 +2318,7 @@ status_label.pack(fill="x", pady=(4, 0))
 action_buttons = [btn_data, btn_invoice, btn_delete, btn_scrape]
 set_action_buttons_state(False)
 update_login_status(False)
+root.after(1500, lambda: check_for_updates(show_latest_message=False, auto_check=True))
 
 root.mainloop()
 
