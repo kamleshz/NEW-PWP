@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PWP Bot Web Dashboard</title>
+    <style>
+        :root {
+            color-scheme: light;
+            font-family: Arial, sans-serif;
+        }
+        body {
+            margin: 0;
+            background: #f5f7fb;
+            color: #1f2937;
+        }
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+        .hero {
+            background: #0f766e;
+            color: #fff;
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 20px;
+        }
+        .hero p {
+            margin: 8px 0 0;
+            color: #d1fae5;
+        }
+        .status {
+            margin-top: 12px;
+            padding: 10px 12px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.12);
+            display: inline-block;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 18px;
+        }
+        .card {
+            background: #fff;
+            border-radius: 16px;
+            padding: 18px;
+            box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+        }
+        h1, h2 {
+            margin: 0;
+        }
+        h2 {
+            font-size: 20px;
+            margin-bottom: 14px;
+        }
+        form, .actions {
+            display: grid;
+            gap: 12px;
+        }
+        label {
+            font-size: 14px;
+            font-weight: 700;
+        }
+        input, select, button {
+            font: inherit;
+            padding: 10px 12px;
+            border-radius: 10px;
+            border: 1px solid #d1d5db;
+        }
+        button {
+            border: 0;
+            background: #16a34a;
+            color: #fff;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        button.secondary {
+            background: #2563eb;
+        }
+        button.warn {
+            background: #ea580c;
+        }
+        button:disabled {
+            opacity: 0.65;
+            cursor: wait;
+        }
+        .result {
+            margin-top: 20px;
+            background: #0f172a;
+            color: #e2e8f0;
+            border-radius: 16px;
+            padding: 18px;
+        }
+        .result pre {
+            white-space: pre-wrap;
+            margin: 0;
+            font-family: Consolas, monospace;
+        }
+        .files a {
+            color: #93c5fd;
+            text-decoration: none;
+        }
+        .hint {
+            font-size: 13px;
+            color: #6b7280;
+            margin-top: -4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="hero">
+            <h1>PWP Bot Web Dashboard</h1>
+            <p>Single-user Flask app for login, validation, data upload, invoice upload, delete, and scrape/export.</p>
+            <div class="status" id="health-status">Checking login status...</div>
+        </div>
+
+        <div class="grid">
+            <div class="card">
+                <h2>Login</h2>
+                <form id="login-form">
+                    <label for="email">Email</label>
+                    <input id="email" name="email" type="email" placeholder="Enter portal email" required>
+                    <label for="password">Password</label>
+                    <input id="password" name="password" type="password" placeholder="Enter portal password" required>
+                    <div class="hint">Local mode can open a visible browser. Deployed mode uses headless browser automation on the server.</div>
+                    <button type="submit">Open Login Browser</button>
+                </form>
+            </div>
+
+            <div class="card">
+                <h2>Validate Excel</h2>
+                <form id="validate-form">
+                    <label for="validate_excel_file">Excel File</label>
+                    <input id="validate_excel_file" name="excel_file" type="file" accept=".xlsx,.xls" required>
+                    <button class="secondary" type="submit">Validate File</button>
+                </form>
+            </div>
+
+            <div class="card">
+                <h2>Data Upload</h2>
+                <form id="data-upload-form">
+                    <label for="data_excel_file">Excel File</label>
+                    <input id="data_excel_file" name="excel_file" type="file" accept=".xlsx,.xls" required>
+                    <label for="upload_mode">Upload Mode</label>
+                    <select id="upload_mode" name="upload_mode">
+                        <option value="normal">Normal</option>
+                        <option value="export">Export</option>
+                    </select>
+                    <button type="submit">Run Data Upload</button>
+                </form>
+            </div>
+
+            <div class="card">
+                <h2>Invoice Upload</h2>
+                <form id="invoice-upload-form">
+                    <label for="invoice_excel_file">Excel File</label>
+                    <input id="invoice_excel_file" name="excel_file" type="file" accept=".xlsx,.xls" required>
+                    <label for="pdf_files">Invoice PDFs</label>
+                    <input id="pdf_files" name="pdf_files" type="file" accept=".pdf" multiple required>
+                    <button type="submit">Run Invoice Upload</button>
+                </form>
+            </div>
+
+            <div class="card">
+                <h2>Delete Upload Data</h2>
+                <form id="delete-upload-form">
+                    <label for="delete_excel_file">Excel File</label>
+                    <input id="delete_excel_file" name="excel_file" type="file" accept=".xlsx,.xls" required>
+                    <button class="warn" type="submit">Delete By Invoice List</button>
+                </form>
+            </div>
+
+            <div class="card">
+                <h2>Scrape / Export</h2>
+                <div class="actions">
+                    <button class="secondary" data-choice="procurement">Scrape Procurement</button>
+                    <button class="secondary" data-choice="production">Scrape Production</button>
+                    <button class="secondary" data-choice="inventory">Scrape Inventory & Sales</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="result">
+            <pre id="result-output">Ready.</pre>
+            <div class="files" id="result-files"></div>
+        </div>
+    </div>
+
+    <script>
+        const resultOutput = document.getElementById('result-output');
+        const resultFiles = document.getElementById('result-files');
+        const healthStatus = document.getElementById('health-status');
+
+        function setResult(payload) {
+            resultOutput.textContent = JSON.stringify(payload, null, 2);
+            resultFiles.innerHTML = '';
+            const files = payload.files || [];
+            files.forEach((file) => {
+                const link = document.createElement('a');
+                link.href = file.download_url;
+                link.textContent = `Download ${file.name}`;
+                link.target = '_blank';
+                const wrapper = document.createElement('div');
+                wrapper.appendChild(link);
+                resultFiles.appendChild(wrapper);
+            });
+        }
+
+        async function refreshHealth() {
+            const response = await fetch('/api/health');
+            const data = await response.json();
+            healthStatus.textContent = data.logged_in ? 'Login status: Browser session available' : 'Login status: Not logged in';
+        }
+
+        async function pollJob(jobId) {
+            let keepPolling = true;
+            while (keepPolling) {
+                const response = await fetch(`/api/jobs/${jobId}`);
+                const data = await response.json();
+                setResult(data);
+                await refreshHealth();
+
+                if (!data.ok || data.status === 'completed' || data.status === 'failed') {
+                    keepPolling = false;
+                    break;
+                }
+
+                await new Promise((resolve) => setTimeout(resolve, 2500));
+            }
+        }
+
+        async function handleApiResponse(responseData) {
+            setResult(responseData);
+            if (responseData.job_id) {
+                await pollJob(responseData.job_id);
+            } else {
+                await refreshHealth();
+            }
+        }
+
+        async function submitJsonForm(url, payload, button) {
+            button.disabled = true;
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await response.json();
+                await handleApiResponse(data);
+            } finally {
+                button.disabled = false;
+            }
+        }
+
+        async function submitMultipartForm(form, url) {
+            const button = form.querySelector('button[type="submit"]');
+            button.disabled = true;
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    body: new FormData(form)
+                });
+                const data = await response.json();
+                await handleApiResponse(data);
+            } finally {
+                button.disabled = false;
+            }
+        }
+
+        document.getElementById('login-form').addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const form = event.currentTarget;
+            const button = form.querySelector('button');
+            await submitJsonForm('/api/login', {
+                email: form.email.value,
+                password: form.password.value,
+            }, button);
+        });
+
+        document.getElementById('validate-form').addEventListener('submit', async (event) => {
+            event.preventDefault();
+            await submitMultipartForm(event.currentTarget, '/api/validate');
+        });
+
+        document.getElementById('data-upload-form').addEventListener('submit', async (event) => {
+            event.preventDefault();
+            await submitMultipartForm(event.currentTarget, '/api/data-upload');
+        });
+
+        document.getElementById('invoice-upload-form').addEventListener('submit', async (event) => {
+            event.preventDefault();
+            await submitMultipartForm(event.currentTarget, '/api/invoice-upload');
+        });
+
+        document.getElementById('delete-upload-form').addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const confirmed = window.confirm('Do you want to continue with delete upload data?');
+            if (!confirmed) {
+                return;
+            }
+            await submitMultipartForm(event.currentTarget, '/api/delete-upload');
+        });
+
+        document.querySelectorAll('[data-choice]').forEach((button) => {
+            button.addEventListener('click', async () => {
+                await submitJsonForm('/api/scrape', { choice: button.dataset.choice }, button);
+            });
+        });
+
+        refreshHealth();
+    </script>
+</body>
+</html>
