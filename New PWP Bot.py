@@ -21,8 +21,12 @@ import json
 import os
 import math
 import difflib
+import subprocess
+import sys
 import threading
+import tempfile
 import webbrowser
+import zipfile
 from bs4 import BeautifulSoup
 from dateutil.relativedelta import relativedelta
 from PyPDF2 import PdfMerger,PdfReader
@@ -35,6 +39,8 @@ from requests.exceptions import ConnectTimeout
 APP_VERSION = "1.0.0"
 UPDATE_METADATA_URL = "https://raw.githubusercontent.com/kamleshz/NEW-PWP/main/desktop_release.json"
 DEFAULT_RELEASE_PAGE_URL = "https://github.com/kamleshz/NEW-PWP/releases/latest"
+DEFAULT_RELEASE_DOWNLOAD_URL = "https://github.com/kamleshz/NEW-PWP/releases/latest/download/PWPDesktopApp.zip"
+APP_EXECUTABLE_NAME = "PWPDesktopApp.exe"
 
 def parse_version_parts(version_value):
     version_text = str(version_value or "").strip().lstrip("vV")
@@ -64,8 +70,11 @@ def build_release_notes_text(metadata):
         return "\n".join(f"- {item}" for item in notes)
     return str(notes).strip()
 
+def get_release_download_url(metadata):
+    return str(metadata.get("download_url", "")).strip() or DEFAULT_RELEASE_DOWNLOAD_URL
+
 def open_update_download(metadata):
-    download_url = str(metadata.get("download_url", "")).strip() or DEFAULT_RELEASE_PAGE_URL
+    download_url = get_release_download_url(metadata) or DEFAULT_RELEASE_PAGE_URL
     webbrowser.open(download_url)
 
 def get_update_summary_lines(latest_version):
@@ -73,6 +82,122 @@ def get_update_summary_lines(latest_version):
         f"Current version: {APP_VERSION}",
         f"Latest version: {latest_version}"
     ]
+
+def get_runtime_app_dir():
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+def is_packaged_desktop_app():
+    return getattr(sys, "frozen", False)
+
+def download_update_package(metadata):
+    download_url = get_release_download_url(metadata)
+    if not download_url:
+        raise ValueError("Update metadata does not contain a downloadable ZIP URL.")
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="pwp_update_"))
+    zip_path = temp_dir / "PWPDesktopApp.zip"
+    with requests.get(download_url, stream=True, timeout=60) as response:
+        response.raise_for_status()
+        with open(zip_path, "wb") as file_handle:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    file_handle.write(chunk)
+    return zip_path
+
+def extract_update_package(zip_path):
+    extract_dir = zip_path.parent / "extracted"
+    with zipfile.ZipFile(zip_path, "r") as archive:
+        archive.extractall(extract_dir)
+
+    expected_exe = extract_dir / APP_EXECUTABLE_NAME
+    if not expected_exe.exists():
+        raise ValueError("Downloaded update package is missing PWPDesktopApp.exe.")
+    return extract_dir
+
+def launch_updater_script(extract_dir):
+    target_dir = get_runtime_app_dir()
+    target_exe = target_dir / APP_EXECUTABLE_NAME
+    source_dir = Path(extract_dir).resolve()
+    cleanup_dir = source_dir.parent
+    script_path = cleanup_dir / "apply_update.ps1"
+
+    script_content = f"""$ErrorActionPreference = "Stop"
+Start-Sleep -Seconds 2
+$sourceDir = "{source_dir}"
+$targetDir = "{target_dir}"
+
+Copy-Item (Join-Path $sourceDir "{APP_EXECUTABLE_NAME}") (Join-Path $targetDir "{APP_EXECUTABLE_NAME}") -Force
+if (Test-Path (Join-Path $sourceDir "desktop_release.json")) {{
+    Copy-Item (Join-Path $sourceDir "desktop_release.json") (Join-Path $targetDir "desktop_release.json") -Force
+}}
+if (Test-Path (Join-Path $sourceDir "CLIENT_README.txt")) {{
+    Copy-Item (Join-Path $sourceDir "CLIENT_README.txt") (Join-Path $targetDir "CLIENT_README.txt") -Force
+}}
+
+Start-Process "{target_exe}"
+Start-Sleep -Seconds 2
+Remove-Item "{cleanup_dir}" -Recurse -Force
+"""
+
+    script_path.write_text(script_content, encoding="utf-8")
+    creation_flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+    subprocess.Popen(
+        [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script_path)
+        ],
+        creationflags=creation_flags
+    )
+
+def start_auto_update(metadata, latest_version):
+    if not is_packaged_desktop_app():
+        messagebox.showinfo(
+            "Auto Update Not Available",
+            "Automatic self-update works only in the packaged desktop EXE.\n\n"
+            "The download page will open instead."
+        )
+        open_update_download(metadata)
+        return
+
+    if 'update_status' in globals():
+        update_status(f"Downloading version {latest_version}...", "info")
+
+    def worker():
+        try:
+            zip_path = download_update_package(metadata)
+            extract_dir = extract_update_package(zip_path)
+        except Exception as e:
+            root.after(
+                0,
+                lambda: messagebox.showerror(
+                    "Update Failed",
+                    "The app could not download or prepare the update package.\n\n"
+                    f"Reason: {e}"
+                )
+            )
+            root.after(0, lambda: update_status("Automatic update failed.", "error"))
+            return
+
+        def install_update():
+            if 'update_status' in globals():
+                update_status(f"Installing version {latest_version} and restarting...", "info")
+            messagebox.showinfo(
+                "Installing Update",
+                f"Version {latest_version} has been downloaded.\n\n"
+                "The app will now close, replace itself, and restart automatically."
+            )
+            launch_updater_script(extract_dir)
+            root.after(300, root.destroy)
+
+        root.after(0, install_update)
+
+    threading.Thread(target=worker, daemon=True).start()
 
 def handle_update_success(metadata, show_latest_message, auto_check):
     latest_version = str(metadata.get("version", "")).strip()
@@ -86,11 +211,11 @@ def handle_update_success(metadata, show_latest_message, auto_check):
         prompt_lines = get_update_summary_lines(latest_version)
         if release_notes:
             prompt_lines.extend(["", "Release notes:", release_notes])
-        prompt_lines.extend(["", "Do you want to open the download page now?"])
+        prompt_lines.extend(["", "Do you want to download and install the update now?"])
         if 'update_status' in globals():
             update_status(f"New version {latest_version} is available.", "info")
         if messagebox.askyesno("Update Available", "\n".join(prompt_lines)):
-            open_update_download(metadata)
+            start_auto_update(metadata, latest_version)
         return
 
     if 'update_status' in globals():

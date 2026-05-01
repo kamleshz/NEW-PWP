@@ -20,7 +20,8 @@ Important
 - Keep internet connected while using the app.
 - Do not rename the EXE file.
 - Use only the latest version shared by the provider.
-- If an update is available, use Help -> Check for Updates.
+- If an update is available, the app can download and restart into the newer version automatically.
+- You can also use Help -> Check for Updates.
 
 Support
 - Contact the provider if login, upload, or update download fails.

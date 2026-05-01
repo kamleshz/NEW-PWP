@@ -62,11 +62,12 @@ Use the desktop bot when users must see and interact with the browser on their o
 - Desktop app version is stored in `New PWP Bot.py`
 - Update metadata is stored in `desktop_release.json`
 - Users get update checks on startup and from `Help -> Check for Updates`
+- Packaged desktop app can now download the latest ZIP, replace local files, and restart automatically
 - For a new desktop release:
   - increase the app version
   - update `desktop_release.json`
   - rebuild the `.exe`
-  - upload the packaged file to GitHub Releases
+  - upload `PWPDesktopApp.zip` to GitHub Releases using the same filename every time
 
 ## Render Deployment
 
