@@ -39,3 +39,14 @@ exe = EXE(
     entitlements_file=None,
     version='desktop_version_info.txt',
 )
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='PWPDesktopApp',
+)

@@ -46,8 +46,8 @@ DEFAULT_RELEASE_DOWNLOAD_URL = "https://github.com/kamleshz/NEW-PWP/releases/lat
 APP_EXECUTABLE_NAME = "PWPDesktopApp.exe"
 LICENSE_VALIDATE_URL = "https://api.recirculytics.in/v1/validate"
 SW_VERSION = APP_VERSION
-LICENSE_CACHE_DIR = Path(os.getenv("APPDATA", Path.home())) / "ReCirculytics"
-LICENSE_CACHE_FILE = LICENSE_CACHE_DIR / "lc.cache"
+PRIMARY_CACHE_ROOT = Path(os.getenv("LOCALAPPDATA") or os.getenv("APPDATA") or str(Path.home()))
+FALLBACK_CACHE_ROOT = Path.home() / ".recirculytics"
 LICENSE_GRACE_SECS = 86400
 GST_PATTERN = re.compile(r"\b\d{2}[A-Z]{5}\d{4}[A-Z][A-Z0-9]Z[A-Z0-9]\b")
 
@@ -309,18 +309,32 @@ def get_machine_id():
         return hashlib.sha256(platform.node().encode("utf-8")).hexdigest()
 
 
+def get_license_cache_candidates():
+    return [
+        PRIMARY_CACHE_ROOT / "ReCirculytics" / "lc.cache",
+        FALLBACK_CACHE_ROOT / "lc.cache",
+    ]
+
+
 def save_license_cache(data):
-    LICENSE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     cache_data = dict(data)
     cache_data["cached_at"] = time.time()
-    LICENSE_CACHE_FILE.write_text(json.dumps(cache_data), encoding="utf-8")
+    for cache_file in get_license_cache_candidates():
+        try:
+            cache_file.parent.mkdir(parents=True, exist_ok=True)
+            cache_file.write_text(json.dumps(cache_data), encoding="utf-8")
+            return
+        except Exception:
+            continue
 
 
 def load_cached_license_file():
-    try:
-        return json.loads(LICENSE_CACHE_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        return None
+    for cache_file in get_license_cache_candidates():
+        try:
+            return json.loads(cache_file.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+    return None
 
 
 def load_cached_license(license_key):
@@ -524,11 +538,10 @@ class LicenseGateDialog:
         self.result = False
         self.license_key = ""
 
-        self.window = tk.Toplevel(master)
+        self.window = tk.Toplevel()
         self.window.title("License Validation")
         self.window.configure(bg="#F8FAFC")
         self.window.resizable(False, False)
-        self.window.transient(master)
         self.window.grab_set()
         self.window.protocol("WM_DELETE_WINDOW", self.cancel)
 
@@ -611,6 +624,11 @@ class LicenseGateDialog:
         x = self.master.winfo_screenwidth() // 2 - self.window.winfo_reqwidth() // 2
         y = self.master.winfo_screenheight() // 2 - self.window.winfo_reqheight() // 2
         self.window.geometry(f"+{x}+{y}")
+        self.window.deiconify()
+        self.window.lift()
+        self.window.focus_force()
+        self.window.attributes("-topmost", True)
+        self.window.after(300, lambda: self.window.attributes("-topmost", False))
 
     def validate(self):
         license_key = normalize_license_key(self.key_var.get())

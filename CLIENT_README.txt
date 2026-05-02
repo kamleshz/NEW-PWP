@@ -3,12 +3,13 @@ Version: 1.0.1
 
 How to use
 1. Extract this folder or ZIP file first.
-2. Double-click PWPDesktopApp.exe.
-3. If Windows shows a warning, click "More info" and then "Run anyway".
-4. Click Login inside the app.
-5. A browser opens on your computer.
-6. Complete login or captcha if the portal asks.
-7. Return to the app and use the required buttons.
+2. Open the PWPDesktopApp folder.
+3. Double-click PWPDesktopApp.exe inside that folder.
+4. If Windows shows a warning, click "More info" and then "Run anyway".
+5. Click Login inside the app.
+6. A browser opens on your computer.
+7. Complete login or captcha if the portal asks.
+8. Return to the app and use the required buttons.
 
 What to do first
 - Login
@@ -18,7 +19,7 @@ What to do first
 
 Important
 - Keep internet connected while using the app.
-- Do not rename the EXE file.
+- Do not rename the app folder or the EXE file.
 - Use only the latest version shared by the provider.
 - If an update is available, the app can download and restart into the newer version automatically.
 - You can also use Help -> Check for Updates.
