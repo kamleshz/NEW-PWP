@@ -1,9 +1,9 @@
 {
-  "version": "1.0.0",
+  "version": "1.0.1",
   "download_url": "https://github.com/kamleshz/NEW-PWP/releases/latest/download/PWPDesktopApp.zip",
   "release_notes": [
-    "Desktop app can now check GitHub for new versions.",
-    "Users see update notifications on startup and from the Help menu.",
-    "Current build includes the PWP automation dashboard and deployable web app files."
+    "Added startup license validation before the dashboard opens.",
+    "Protected actions now stay locked until the portal GST matches the licensed GST.",
+    "License information is shown in the dashboard and About dialog."
   ]
 }

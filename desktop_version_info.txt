@@ -16,11 +16,11 @@ VSVersionInfo(
         [
           StringStruct('CompanyName', 'Kamlesh'),
           StringStruct('FileDescription', 'PWP Automation Desktop App'),
-          StringStruct('FileVersion', '1.0.0'),
+          StringStruct('FileVersion', '1.0.1'),
           StringStruct('InternalName', 'PWPDesktopApp'),
           StringStruct('OriginalFilename', 'PWPDesktopApp.exe'),
           StringStruct('ProductName', 'PWP Automation Desktop App'),
-          StringStruct('ProductVersion', '1.0.0')
+          StringStruct('ProductVersion', '1.0.1')
         ]
       )
     ]),

@@ -1,5 +1,5 @@
 PWP Automation Desktop App
-Version: 1.0.0
+Version: 1.0.1
 
 How to use
 1. Extract this folder or ZIP file first.

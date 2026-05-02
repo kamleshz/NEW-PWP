@@ -21,6 +21,9 @@ import json
 import os
 import math
 import difflib
+import hashlib
+import platform
+import re
 import subprocess
 import sys
 import threading
@@ -36,11 +39,31 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
 from selenium.webdriver.common.action_chains import ActionChains
 from requests.exceptions import ConnectTimeout
 
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 UPDATE_METADATA_URL = "https://raw.githubusercontent.com/kamleshz/NEW-PWP/main/desktop_release.json"
 DEFAULT_RELEASE_PAGE_URL = "https://github.com/kamleshz/NEW-PWP/releases/latest"
 DEFAULT_RELEASE_DOWNLOAD_URL = "https://github.com/kamleshz/NEW-PWP/releases/latest/download/PWPDesktopApp.zip"
 APP_EXECUTABLE_NAME = "PWPDesktopApp.exe"
+LICENSE_VALIDATE_URL = "https://api.recirculytics.in/v1/validate"
+SW_VERSION = APP_VERSION
+LICENSE_CACHE_DIR = Path(os.getenv("APPDATA", Path.home())) / "ReCirculytics"
+LICENSE_CACHE_FILE = LICENSE_CACHE_DIR / "lc.cache"
+LICENSE_GRACE_SECS = 86400
+GST_PATTERN = re.compile(r"\b\d{2}[A-Z]{5}\d{4}[A-Z][A-Z0-9]Z[A-Z0-9]\b")
+
+_license_info = {
+    "key": "",
+    "customer_name": "",
+    "tier": "",
+    "expires_on": "",
+    "allowed_gsts": [],
+    "fy_start": "",
+    "fy_end": "",
+    "portal_gst": "",
+    "offline": False,
+    "license_verified": False,
+    "gst_verified": False,
+}
 
 def parse_version_parts(version_value):
     version_text = str(version_value or "").strip().lstrip("vV")
@@ -250,6 +273,379 @@ def check_for_updates(show_latest_message=True, auto_check=False):
         root.after(0, lambda: handle_update_success(metadata, show_latest_message, auto_check))
 
     threading.Thread(target=worker, daemon=True).start()
+
+
+def normalize_license_key(value):
+    return str(value or "").strip().upper()
+
+
+def normalize_gst(value):
+    return str(value or "").strip().upper()
+
+
+def normalize_gst_list(values):
+    if isinstance(values, str):
+        values = [values]
+    return [normalize_gst(item) for item in (values or []) if normalize_gst(item)]
+
+
+def get_machine_id():
+    try:
+        import machineid
+        return machineid.hashed_id("recirculytics-pwp")
+    except Exception:
+        pass
+
+    try:
+        import winreg
+
+        key = winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Microsoft\Cryptography"
+        )
+        machine_guid, _ = winreg.QueryValueEx(key, "MachineGuid")
+        return hashlib.sha256(str(machine_guid).encode("utf-8")).hexdigest()
+    except Exception:
+        return hashlib.sha256(platform.node().encode("utf-8")).hexdigest()
+
+
+def save_license_cache(data):
+    LICENSE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_data = dict(data)
+    cache_data["cached_at"] = time.time()
+    LICENSE_CACHE_FILE.write_text(json.dumps(cache_data), encoding="utf-8")
+
+
+def load_cached_license_file():
+    try:
+        return json.loads(LICENSE_CACHE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def load_cached_license(license_key):
+    cached = load_cached_license_file()
+    if not cached:
+        return None
+    if normalize_license_key(cached.get("key")) != normalize_license_key(license_key):
+        return None
+    if time.time() - float(cached.get("cached_at", 0)) >= LICENSE_GRACE_SECS:
+        return None
+    return cached
+
+
+def get_cached_license_key():
+    cached = load_cached_license_file() or {}
+    return normalize_license_key(cached.get("key", ""))
+
+
+def apply_license_info(license_key, response_data, gst_verified=False, portal_gst=""):
+    _license_info.update({
+        "key": normalize_license_key(license_key),
+        "customer_name": str(response_data.get("customer_name", "")).strip(),
+        "tier": str(response_data.get("tier", "")).strip(),
+        "expires_on": str(response_data.get("expires_on", "")).strip(),
+        "allowed_gsts": normalize_gst_list(response_data.get("allowed_gsts", [])),
+        "fy_start": str(response_data.get("fy_start", "")).strip(),
+        "fy_end": str(response_data.get("fy_end", "")).strip(),
+        "portal_gst": normalize_gst(portal_gst or response_data.get("gst", "")),
+        "offline": bool(response_data.get("offline", False)),
+        "license_verified": bool(response_data.get("ok", False)),
+        "gst_verified": bool(gst_verified),
+    })
+
+
+def validate_license_online(license_key, gst=""):
+    normalized_key = normalize_license_key(license_key)
+    normalized_gst = normalize_gst(gst)
+    payload = {
+        "license_key": normalized_key,
+        "machine_id": get_machine_id(),
+        "gst": normalized_gst,
+        "sw_version": SW_VERSION,
+    }
+
+    try:
+        response = requests.post(LICENSE_VALIDATE_URL, json=payload, timeout=10)
+    except requests.exceptions.ConnectionError:
+        cached = load_cached_license(normalized_key)
+        if cached:
+            return {
+                "ok": True,
+                "offline": True,
+                "customer_name": cached.get("customer_name", ""),
+                "tier": cached.get("tier", ""),
+                "expires_on": cached.get("expires_on", ""),
+                "allowed_gsts": cached.get("allowed_gsts", []),
+                "fy_start": cached.get("fy_start", ""),
+                "fy_end": cached.get("fy_end", ""),
+                "gst": normalized_gst,
+            }
+        return {
+            "ok": False,
+            "message": "Cannot reach the license server and no recent cached session was found."
+        }
+    except requests.exceptions.Timeout:
+        return {
+            "ok": False,
+            "message": "License server timed out. Please check your internet connection and try again."
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "message": f"License validation error: {exc}"
+        }
+
+    if response.status_code != 200:
+        return {
+            "ok": False,
+            "message": (
+                f"License server returned HTTP {response.status_code}. "
+                "Please contact support@recirculytics.in."
+            ),
+        }
+
+    try:
+        data = response.json()
+    except Exception:
+        return {
+            "ok": False,
+            "message": "License server returned an unreadable response."
+        }
+
+    if data.get("status") == "valid":
+        cache_payload = {
+            "key": normalized_key,
+            "customer_name": data.get("customer_name", ""),
+            "tier": data.get("tier", ""),
+            "expires_on": data.get("expires_on", ""),
+            "allowed_gsts": normalize_gst_list(data.get("allowed_gsts", [])),
+            "fy_start": data.get("fy_start", ""),
+            "fy_end": data.get("fy_end", ""),
+        }
+        save_license_cache(cache_payload)
+        return {
+            "ok": True,
+            **cache_payload,
+            "gst": normalized_gst,
+        }
+
+    return {
+        "ok": False,
+        "code": data.get("code", "UNKNOWN"),
+        "message": data.get("message", "License validation failed."),
+    }
+
+
+def build_license_summary_lines():
+    allowed_gsts = ", ".join(_license_info.get("allowed_gsts", [])) or "Not set"
+    footer_mode = "Offline grace mode" if _license_info.get("offline") else "Online validated"
+    return [
+        f"Customer: {_license_info.get('customer_name') or 'Not available'}",
+        f"Tier: {_license_info.get('tier') or 'Not available'}",
+        f"Expires: {_license_info.get('expires_on') or 'Not available'}",
+        f"Allowed GST: {allowed_gsts}",
+        f"License key: {_license_info.get('key') or 'Not available'}",
+        f"Validation mode: {footer_mode}",
+    ]
+
+
+def build_about_text():
+    lines = [
+        "PWP Automation Dashboard",
+        f"Desktop version: {APP_VERSION}",
+        "",
+        "License",
+    ]
+    lines.extend(build_license_summary_lines())
+    portal_gst = _license_info.get("portal_gst") or "Not verified"
+    lines.extend([
+        f"Portal GST: {portal_gst}",
+        f"GST verified: {'Yes' if _license_info.get('gst_verified') else 'No'}",
+    ])
+    return "\n".join(lines)
+
+
+def scrape_portal_gst_candidates():
+    if 'driver' not in globals() or driver is None:
+        return []
+
+    text_fragments = []
+    try:
+        body_text = driver.find_element(By.TAG_NAME, "body").text
+        if body_text:
+            text_fragments.append(body_text)
+    except Exception:
+        pass
+
+    try:
+        if driver.page_source:
+            text_fragments.append(driver.page_source)
+    except Exception:
+        pass
+
+    candidates = []
+    seen = set()
+    for fragment in text_fragments:
+        for match in GST_PATTERN.findall(fragment.upper()):
+            if match not in seen:
+                seen.add(match)
+                candidates.append(match)
+    return candidates
+
+
+def verify_portal_gst_against_license():
+    license_key = _license_info.get("key")
+    if not license_key:
+        return False, "License key is not available in this session."
+
+    candidates = scrape_portal_gst_candidates()
+    if not candidates:
+        return False, (
+            "Unable to detect GST on the CPCB page. After logging in, open the page or profile "
+            "where GST is visible, then try Login again."
+        )
+
+    last_error = "Unable to validate the portal GST."
+    for portal_gst in candidates:
+        response = validate_license_online(license_key, portal_gst)
+        if response.get("ok"):
+            apply_license_info(license_key, response, gst_verified=True, portal_gst=portal_gst)
+            return True, portal_gst
+        last_error = response.get("message", last_error)
+
+    _license_info["gst_verified"] = False
+    return False, last_error
+
+
+class LicenseGateDialog:
+    def __init__(self, master):
+        self.master = master
+        self.result = False
+        self.license_key = ""
+
+        self.window = tk.Toplevel(master)
+        self.window.title("License Validation")
+        self.window.configure(bg="#F8FAFC")
+        self.window.resizable(False, False)
+        self.window.transient(master)
+        self.window.grab_set()
+        self.window.protocol("WM_DELETE_WINDOW", self.cancel)
+
+        self.status_var = tk.StringVar(value="Enter your license key to continue.")
+        self.key_var = tk.StringVar(value=get_cached_license_key())
+
+        container = tk.Frame(self.window, bg="#F8FAFC", padx=18, pady=16)
+        container.pack(fill="both", expand=True)
+
+        tk.Label(
+            container,
+            text="PWP Automation Tool - Licensed Edition",
+            bg="#F8FAFC",
+            fg="#0F172A",
+            font=("Verdana", 11, "bold"),
+        ).pack(anchor="w")
+
+        tk.Label(
+            container,
+            text="ReCirculytics Sustainable Solutions LLP",
+            bg="#F8FAFC",
+            fg="#475569",
+            font=("Verdana", 9),
+        ).pack(anchor="w", pady=(4, 10))
+
+        tk.Label(
+            container,
+            text="License Key",
+            bg="#F8FAFC",
+            fg="#334155",
+            font=("Verdana", 9, "bold"),
+        ).pack(anchor="w")
+
+        self.entry = tk.Entry(container, textvariable=self.key_var, width=42, font=("Verdana", 10))
+        self.entry.pack(fill="x", pady=(6, 10))
+        self.entry.focus_set()
+
+        tk.Label(
+            container,
+            textvariable=self.status_var,
+            bg="#F8FAFC",
+            fg="#0F766E",
+            justify="left",
+            wraplength=360,
+            font=("Verdana", 9),
+        ).pack(anchor="w", pady=(0, 12))
+
+        button_row = tk.Frame(container, bg="#F8FAFC")
+        button_row.pack(fill="x")
+
+        self.validate_button = tk.Button(
+            button_row,
+            text="Validate License",
+            command=self.validate,
+            bg="#0F766E",
+            fg="#FFFFFF",
+            activebackground="#115E59",
+            activeforeground="#FFFFFF",
+            width=18,
+            cursor="hand2",
+        )
+        self.validate_button.pack(side="left")
+
+        tk.Button(
+            button_row,
+            text="Cancel",
+            command=self.cancel,
+            bg="#E2E8F0",
+            fg="#0F172A",
+            activebackground="#CBD5E1",
+            activeforeground="#0F172A",
+            width=12,
+            cursor="hand2",
+        ).pack(side="right")
+
+        self.window.bind("<Return>", lambda _event: self.validate())
+        self.window.bind("<Escape>", lambda _event: self.cancel())
+
+        self.window.update_idletasks()
+        x = self.master.winfo_screenwidth() // 2 - self.window.winfo_reqwidth() // 2
+        y = self.master.winfo_screenheight() // 2 - self.window.winfo_reqheight() // 2
+        self.window.geometry(f"+{x}+{y}")
+
+    def validate(self):
+        license_key = normalize_license_key(self.key_var.get())
+        if not license_key:
+            self.status_var.set("Enter a valid license key.")
+            return
+
+        self.validate_button.config(state="disabled")
+        self.status_var.set("Validating license with the server...")
+        self.window.update_idletasks()
+
+        response = validate_license_online(license_key)
+        if response.get("ok"):
+            apply_license_info(license_key, response, gst_verified=False)
+            self.license_key = license_key
+            self.result = True
+            self.window.destroy()
+            return
+
+        self.status_var.set(response.get("message", "License validation failed."))
+        self.validate_button.config(state="normal")
+
+    def cancel(self):
+        self.result = False
+        self.window.destroy()
+
+
+def show_about_dialog():
+    messagebox.showinfo("About", build_about_text())
+
+
+def run_startup_license_gate():
+    dialog = LicenseGateDialog(root)
+    root.wait_window(dialog.window)
+    return dialog.result
 
 def custom_wait_clickable_and_click(driver, locator, attempts=10):
     count = 0
@@ -2097,6 +2493,63 @@ def update_login_status(is_logged_in):
         login_badge.config(bg="#FEE2E2", fg="#B91C1C")
     root.update_idletasks()
 
+def update_license_status_display():
+    if 'license_status_var' not in globals():
+        return
+
+    if _license_info.get("license_verified"):
+        if _license_info.get("offline"):
+            license_status_var.set("License: Valid (Offline Grace)")
+            license_badge.config(bg="#FEF3C7", fg="#92400E")
+        else:
+            license_status_var.set("License: Valid")
+            license_badge.config(bg="#DCFCE7", fg="#166534")
+    else:
+        license_status_var.set("License: Not Verified")
+        license_badge.config(bg="#FEE2E2", fg="#B91C1C")
+    root.update_idletasks()
+
+
+def update_gst_status_display():
+    if 'gst_status_var' not in globals():
+        return
+
+    portal_gst = _license_info.get("portal_gst")
+    if _license_info.get("gst_verified") and portal_gst:
+        gst_status_var.set(f"Portal GST: {portal_gst}")
+        gst_badge.config(bg="#DCFCE7", fg="#166534")
+    else:
+        gst_status_var.set("Portal GST: Not Verified")
+        gst_badge.config(bg="#FEE2E2", fg="#B91C1C")
+    root.update_idletasks()
+
+
+def update_license_footer():
+    if 'license_footer_var' not in globals():
+        return
+
+    customer_name = _license_info.get("customer_name") or "Unknown customer"
+    tier = _license_info.get("tier") or "No tier"
+    expires_on = _license_info.get("expires_on") or "No expiry info"
+    portal_gst = _license_info.get("portal_gst") or "GST pending"
+    license_footer_var.set(
+        f"Licensed to: {customer_name} | Tier: {tier} | Expires: {expires_on} | Portal GST: {portal_gst}"
+    )
+    root.update_idletasks()
+
+
+def refresh_access_state():
+    actions_enabled = bool(
+        _license_info.get("license_verified")
+        and app_logged_in
+        and _license_info.get("gst_verified")
+    )
+    set_action_buttons_state(actions_enabled)
+    update_license_status_display()
+    update_gst_status_display()
+    update_license_footer()
+
+
 def set_action_buttons_state(enabled):
     state = NORMAL if enabled else DISABLED
     for button in action_buttons:
@@ -2134,28 +2587,59 @@ def run_login():
     try:
         login()
         app_logged_in = 'driver' in globals() and driver is not None
-        if app_logged_in:
+        if not app_logged_in:
+            update_status("Login window did not initialize successfully.", "error")
+            refresh_access_state()
+            return
+
+        messagebox.showinfo(
+            "Complete CPCB Login",
+            "The browser has been opened and credentials were filled.\n\n"
+            "Complete any captcha or final login step in the browser, wait until the portal page is fully loaded, "
+            "and keep the GST-visible page open.\n\nThen click OK to verify the licensed GST."
+        )
+
+        ok, result_message = verify_portal_gst_against_license()
+        if ok:
             update_login_status(True)
-            set_action_buttons_state(True)
-            update_status("Login completed. All actions are now enabled.", "success")
+            update_status(
+                f"Login completed and licensed GST verified: {result_message}. Actions are now enabled.",
+                "success"
+            )
         else:
-            update_status("Login did not complete successfully.", "error")
+            app_logged_in = False
+            update_login_status(False)
+            update_status("Login completed but GST verification failed.", "error")
+            messagebox.showerror(
+                "GST Verification Failed",
+                result_message
+            )
+        refresh_access_state()
     except Exception as e:
         app_logged_in = False
         update_login_status(False)
-        set_action_buttons_state(False)
+        _license_info["gst_verified"] = False
+        _license_info["portal_gst"] = ""
+        refresh_access_state()
         update_status("Login failed.", "error")
         messagebox.showerror("Login Error", str(e))
 
-def require_login(action_name):
-    if app_logged_in:
+def require_portal_access(action_name):
+    if not _license_info.get("license_verified"):
+        update_status("A valid license is required before using the app.", "error")
+        messagebox.showwarning("License Required", "A valid license is required before using this app.")
+        return False
+    if app_logged_in and _license_info.get("gst_verified"):
         return True
-    update_status(f"Please login before using {action_name}.", "error")
-    messagebox.showwarning("Login Required", f"Please login before using {action_name}.")
+    update_status(f"Please login and verify the licensed GST before using {action_name}.", "error")
+    messagebox.showwarning(
+        "Login Required",
+        f"Please complete CPCB login and GST verification before using {action_name}."
+    )
     return False
 
 def run_data_upload():
-    if not require_login("Data Upload"):
+    if not require_portal_access("Data Upload"):
         return
     update_status("Starting data upload. File validation will run first.", "info")
     try:
@@ -2166,7 +2650,7 @@ def run_data_upload():
         messagebox.showerror("Data Upload Error", str(e))
 
 def run_invoice_upload():
-    if not require_login("Invoice Upload"):
+    if not require_portal_access("Invoice Upload"):
         return
     update_status("Starting invoice upload...", "info")
     try:
@@ -2177,7 +2661,7 @@ def run_invoice_upload():
         messagebox.showerror("Invoice Upload Error", str(e))
 
 def run_scrap_data():
-    if not require_login("Scrap Data"):
+    if not require_portal_access("Scrap Data"):
         return
     update_status("Starting data scraping...", "info")
     try:
@@ -2188,7 +2672,7 @@ def run_scrap_data():
         messagebox.showerror("Scrap Data Error", str(e))
 
 def run_delete_upload_data():
-    if not require_login("Delete Upload Data"):
+    if not require_portal_access("Delete Upload Data"):
         return
     if not messagebox.askyesno("Confirm Delete", "Do you want to continue with delete upload data?"):
         update_status("Delete action cancelled.", "info")
@@ -2213,9 +2697,13 @@ window_height = 600
 x_cordinate = int((screen_width / 2) - (window_width / 2))
 y_cordinate = int((screen_height / 2) - (window_height / 2))
 root.geometry(f"{window_width}x{window_height}+{x_cordinate}+{y_cordinate}")
+root.withdraw()
 
-status_var = StringVar(value="Ready. Start with Login, then use the workflow buttons.")
+status_var = StringVar(value="Ready. Validate your license, then login and verify GST.")
 login_status_var = StringVar(value="Login Status: Not Connected")
+license_status_var = StringVar(value="License: Not Verified")
+gst_status_var = StringVar(value="Portal GST: Not Verified")
+license_footer_var = StringVar(value="Licensed to: Unknown customer | Tier: No tier | Expires: No expiry info | Portal GST: GST pending")
 selected_file_var = StringVar(value="Selected File: None")
 
 menubar = Menu(root, bg=HEADER_BG, fg=HEADER_TEXT, tearoff=0)
@@ -2233,13 +2721,7 @@ excel_menu.add_command(label="Download Delete Entry Format", command=download_de
 
 view_menu = Menu(menubar, tearoff=0, bg=HEADER_BG, fg=HEADER_TEXT)
 menubar.add_cascade(label="Help", menu=view_menu)
-view_menu.add_command(
-    label="About",
-    command=lambda: messagebox.showinfo(
-        "About",
-        f"PWP Automation Dashboard\nVersion: {APP_VERSION}"
-    )
-)
+view_menu.add_command(label="About", command=show_about_dialog)
 view_menu.add_command(label="Check for Updates", command=lambda: check_for_updates(show_latest_message=True, auto_check=False))
 
 header_frame = Frame(root, bg=HEADER_BG, padx=24, pady=18)
@@ -2257,20 +2739,45 @@ title_label = Label(
 )
 title_label.pack(side="left")
 
+badge_frame = Frame(header_top, bg=HEADER_BG)
+badge_frame.pack(side="right")
+
+gst_badge = Label(
+    badge_frame,
+    textvariable=gst_status_var,
+    bg="#FEE2E2",
+    fg="#B91C1C",
+    font=("Verdana", 9, "bold"),
+    padx=10,
+    pady=6
+)
+gst_badge.pack(side="right", padx=(8, 0))
+
+license_badge = Label(
+    badge_frame,
+    textvariable=license_status_var,
+    bg="#FEE2E2",
+    fg="#B91C1C",
+    font=("Verdana", 9, "bold"),
+    padx=10,
+    pady=6
+)
+license_badge.pack(side="right", padx=(8, 0))
+
 login_badge = Label(
-    header_top,
+    badge_frame,
     textvariable=login_status_var,
     bg="#FEE2E2",
     fg="#B91C1C",
     font=("Verdana", 9, "bold"),
-    padx=12,
+    padx=10,
     pady=6
 )
 login_badge.pack(side="right")
 
 subtitle_label = Label(
     header_frame,
-    text="1. Login  2. Validate Excel  3. Upload Data / Invoice  4. Delete or Scrape as needed",
+    text="1. License validation  2. Login  3. GST verification  4. Validate and run actions",
     bg=HEADER_BG,
     fg=SUBTEXT_COLOR,
     font=("Verdana", 10)
@@ -2297,7 +2804,7 @@ workflow_title.pack(anchor="w")
 
 workflow_text = Label(
     workflow_card,
-    text="Use Login first. Validate your Excel before upload to avoid portal-side errors.",
+    text="The app validates your license first. After CPCB login, the portal GST must match the licensed GST before actions unlock.",
     bg=CARD_BG,
     fg=MUTED_TEXT,
     justify="left",
@@ -2344,7 +2851,7 @@ right_panel.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
 left_title = Label(left_panel, text="Main Actions", bg=CARD_BG, fg=TEXT_COLOR, font=("Verdana", 12, "bold"))
 left_title.pack(anchor="w")
 
-left_subtitle = Label(left_panel, text="Primary workflow for login, validation and upload.", bg=CARD_BG, fg=MUTED_TEXT, font=("Verdana", 9))
+left_subtitle = Label(left_panel, text="Primary workflow for licensed login, validation and upload.", bg=CARD_BG, fg=MUTED_TEXT, font=("Verdana", 9))
 left_subtitle.pack(anchor="w", pady=(4, 14))
 
 right_title = Label(right_panel, text="Utilities", bg=CARD_BG, fg=TEXT_COLOR, font=("Verdana", 12, "bold"))
@@ -2408,7 +2915,7 @@ guide_title.pack(anchor="w", pady=(14, 6))
 
 guide_text = Label(
     right_panel,
-    text="Login unlocks protected actions.\nValidate Excel checks State and District names.\nDelete action asks for confirmation before running.",
+    text="License validation is required at startup.\nLogin unlocks GST verification.\nProtected actions stay disabled until the portal GST matches the license.",
     bg=CARD_BG,
     fg=MUTED_TEXT,
     justify="left",
@@ -2416,6 +2923,17 @@ guide_text = Label(
     font=("Verdana", 9)
 )
 guide_text.pack(anchor="w")
+
+license_footer_label = Label(
+    right_panel,
+    textvariable=license_footer_var,
+    bg=CARD_BG,
+    fg=MUTED_TEXT,
+    justify="left",
+    wraplength=220,
+    font=("Verdana", 8)
+)
+license_footer_label.pack(anchor="w", pady=(12, 0))
 
 status_frame = Frame(root, bg=STATUS_BG, padx=20, pady=12)
 status_frame.pack(fill="x", side="bottom")
@@ -2440,9 +2958,20 @@ status_label = Label(
 )
 status_label.pack(fill="x", pady=(4, 0))
 
-action_buttons = [btn_data, btn_invoice, btn_delete, btn_scrape]
+action_buttons = [btn_validate, btn_data, btn_invoice, btn_delete, btn_scrape]
 set_action_buttons_state(False)
 update_login_status(False)
+update_license_status_display()
+update_gst_status_display()
+update_license_footer()
+
+if not run_startup_license_gate():
+    root.destroy()
+    sys.exit(0)
+
+refresh_access_state()
+update_status("License validated. Complete CPCB login and GST verification to unlock actions.", "info")
+root.deiconify()
 root.after(1500, lambda: check_for_updates(show_latest_message=False, auto_check=True))
 
 root.mainloop()
